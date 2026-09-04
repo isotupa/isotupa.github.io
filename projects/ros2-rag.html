@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ROS2 RAG with an evaluation harness — Marko Isotupa</title>
+<meta name="description" content="Local question answering over the ROS2 documentation, built around a harness that measures retrieval quality, faithfulness, correctness and latency.">
+<link rel="stylesheet" href="../assets/css/site.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◈</text></svg>">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="home" href="../index.html">← marko&nbsp;isotupa</a>
+    <div class="links"><a href="../index.html#projects">All projects</a></div>
+  </div>
+</nav>
+
+<header class="art-head">
+  <div class="wrap">
+    <div class="kicker">Personal project · <a href="https://github.com/isotupa/ros2_rag">github.com/isotupa/ros2_rag</a></div>
+    <h1>ROS2 RAG, and a harness that measures it</h1>
+    <p class="standfirst">A question-answering system over the ROS2 documentation. The retrieval
+    part is the easy half. The part I built this for is the half that tells you whether it
+    works.</p>
+    <div class="meta">
+      <div><div class="k">Role</div><div class="v">Solo. Ingestion, retrieval, evaluation harness, dashboard.</div></div>
+      <div><div class="k">Stack</div><div class="v">Python, Chroma, Ollama, bge-small-en-v1.5, cross-encoder reranker, ragas, Streamlit, pytest</div></div>
+      <div><div class="k">Runs on</div><div class="v">A CPU-only laptop. No API keys, no hosted models.</div></div>
+    </div>
+  </div>
+</header>
+
+<article>
+<div class="wrap">
+
+<h2>The question worth asking</h2>
+
+<p>Building a RAG demo is a weekend. The interesting question isn't "can it answer" — it will
+always answer. It's <em>did retrieval pull the right passage, and did the model stay inside it
+or fill in the gaps from memory</em>. Those are two separate failure modes and a single
+end-to-end score hides both.</p>
+
+<p>So most of the code here grades those two things across a fixed set of questions, and
+compares a naive configuration against a tuned one on the same corpus with the same model.</p>
+
+<figure class="dark">
+<svg viewBox="0 0 720 268" role="img" aria-label="Pipeline diagram: ROS2 docs are cleaned, chunked, embedded and stored in Chroma; a question is embedded, retrieved top-k, optionally reranked, and answered by a local LLM; an evaluation harness reads both the retrieval and the generation." xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block;background:#15171a;border-radius:8px">
+  <defs>
+    <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 10 5 0 10z" fill="#6f757d"/></marker>
+  </defs>
+  <g font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#969ba3">
+    <text x="22" y="26" fill="#e0a955" font-size="10" letter-spacing="1.2">INDEXING · ONCE PER CONFIG</text>
+    <g stroke="#262a30" fill="#1b1e22">
+      <rect x="22" y="38" width="104" height="30" rx="4"/>
+      <rect x="152" y="38" width="104" height="30" rx="4"/>
+      <rect x="282" y="38" width="104" height="30" rx="4"/>
+      <rect x="412" y="38" width="104" height="30" rx="4"/>
+    </g>
+    <text x="74" y="57" text-anchor="middle">ROS2 docs</text>
+    <text x="204" y="57" text-anchor="middle">chunk</text>
+    <text x="334" y="57" text-anchor="middle">embed</text>
+    <text x="464" y="57" text-anchor="middle">Chroma</text>
+    <text x="204" y="82" text-anchor="middle" font-size="9.5" fill="#5c6167">chars vs tokens+overlap</text>
+    <text x="334" y="82" text-anchor="middle" font-size="9.5" fill="#5c6167">bge-small-en-v1.5</text>
+    <g stroke="#6f757d" fill="none" marker-end="url(#b)">
+      <path d="M130 53 H148"/><path d="M260 53 H278"/><path d="M390 53 H408"/>
+    </g>
+
+    <text x="22" y="126" fill="#e0a955" font-size="10" letter-spacing="1.2">QUERY</text>
+    <g stroke="#262a30" fill="#1b1e22">
+      <rect x="22" y="138" width="104" height="30" rx="4"/>
+      <rect x="152" y="138" width="104" height="30" rx="4"/>
+      <rect x="282" y="138" width="104" height="30" rx="4" stroke-dasharray="3 3"/>
+      <rect x="412" y="138" width="104" height="30" rx="4"/>
+      <rect x="542" y="138" width="150" height="30" rx="4"/>
+    </g>
+    <text x="74" y="157" text-anchor="middle">question</text>
+    <text x="204" y="157" text-anchor="middle">top-k dense</text>
+    <text x="334" y="157" text-anchor="middle">rerank</text>
+    <text x="464" y="157" text-anchor="middle">llama3.2:3b</text>
+    <text x="617" y="157" text-anchor="middle" fill="#7ec8b5">grounded answer</text>
+    <text x="334" y="182" text-anchor="middle" font-size="9.5" fill="#5c6167">cross-encoder · tuned only</text>
+    <g stroke="#6f757d" fill="none" marker-end="url(#b)">
+      <path d="M130 153 H148"/><path d="M260 153 H278"/><path d="M390 153 H408"/><path d="M520 153 H538"/>
+      <path d="M464 72 V134"/>
+    </g>
+
+    <rect x="22" y="204" width="670" height="46" rx="6" fill="#1b1e22" stroke="#262a30"/>
+    <text x="38" y="222" fill="#e0a955" font-size="10" letter-spacing="1.2">EVALUATION HARNESS</text>
+    <text x="38" y="240" font-size="10">precision@k · recall@k · nDCG · MRR · hit@k &nbsp;│&nbsp; faithfulness judge · correctness judge &nbsp;│&nbsp; p50/p95 latency · tok/s &nbsp;│&nbsp; ragas cross-check</text>
+    <g stroke="#3b4149" fill="none" stroke-dasharray="3 3">
+      <path d="M204 172 V204"/><path d="M464 172 V204"/>
+    </g>
+  </g>
+</svg>
+<figcaption>Two configurations run through the same code path. Only the chunking and the
+reranker change; the corpus, the embedder and the generator are held fixed so the difference
+is attributable.</figcaption>
+</figure>
+
+<h2>The two configurations</h2>
+
+<div class="tw">
+<table>
+<thead><tr><th></th><th>Baseline</th><th>Tuned</th></tr></thead>
+<tbody>
+<tr><td>Chunking</td><td>1000 characters, no overlap</td><td>512 tokens, ~15% overlap</td></tr>
+<tr><td>Candidates retrieved</td><td>top 4</td><td>top 10</td></tr>
+<tr><td>Reranking</td><td>none</td><td>cross-encoder, keep best 4</td></tr>
+<tr><td>Embedder / generator</td><td colspan="2">identical in both — bge-small-en-v1.5 and llama3.2:3b</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>Holding the embedder fixed is deliberate: it means any movement between the two rows comes
+from chunking and reranking rather than from a better vector space. Comparing embedders is the
+obvious next experiment, and the code supports a full sweep over chunk size, overlap, top-k and
+reranker on/off — I ship the two ends that show the clearest difference.</p>
+
+<h2>How the harness works</h2>
+
+<h3>A gold set that makes retrieval scoreable</h3>
+
+<p>For a sample of documents, the model writes one question and a reference answer, and I record
+which document it came from. That recorded document is the correct retrieval target, and it is
+what turns retrieval metrics into measurements rather than guesses. The set is stored as JSON
+and versioned, so two runs are compared on the same questions.</p>
+
+<h3>Retrieval metrics with no model in the loop</h3>
+
+<p>precision@k, recall@k, nDCG, MRR and hit@k, written by hand and unit tested. They grade per
+document: did a chunk from the right document appear in the top k, and how high. No model
+touches them, so these numbers are exact — which is why they carry more weight than anything
+else the harness reports.</p>
+
+<h3>Two judges, kept apart</h3>
+
+<p>One checks <strong>faithfulness</strong>: is the answer supported by the text that was
+actually retrieved. The other checks <strong>correctness</strong> against the reference answer.
+They have to be separate, because an answer can be correct and ungrounded — the model knew it
+from training rather than from your documents — and that is precisely the failure mode you want
+to be able to see. Each returns a 1–5 score and a line of reasoning through Ollama's JSON schema
+mode so the scores parse cleanly.</p>
+
+<h3>A cross-check and a clock</h3>
+
+<p><a href="https://docs.ragas.io">ragas</a> runs its own faithfulness, answer-relevancy and
+context-precision metrics over the same outputs. If my hand-rolled numbers and ragas point the
+same way I trust them more; if they diverge there is a bug to find. Separately, every call is
+timed and its tokens counted, so p50/p95 latency and tokens per second sit next to the quality
+numbers. Reranking usually improves quality and always adds latency, and that trade is the
+whole reason the harness exists.</p>
+
+<div class="note">
+<p><strong>The judge is a 3B model on a laptop, and it also wrote the gold set.</strong> So the
+judge scores are directional, not ground truth. The retrieval metrics are exact because no
+model touches them, and the thing to read is the movement from baseline to tuned rather than
+the absolute value. Swapping in a stronger judge is one config value. I would rather say this
+plainly than publish a table that implies more than the setup can support — which is also why
+the results table in the repository ships empty, with instructions to generate the numbers
+rather than a screenshot to trust.</p>
+</div>
+
+<h2>Running it</h2>
+
+<pre><code>ollama pull llama3.2:3b
+
+python -m ros2_rag.ingest --limit 300
+python -m ros2_rag.index --config config/baseline.yaml
+python -m ros2_rag.index --config config/tuned.yaml
+python -m ros2_rag.eval.goldset --n 60 --seed 13
+python -m ros2_rag.eval.run_eval --config config/tuned.yaml
+python scripts/make_table.py            # results JSON → markdown table
+streamlit run dashboard/app.py          # both configs, per-question drill-down</code></pre>
+
+<p><code>make all</code> does that in order, and <code>make eval-quick</code> runs 10 questions
+instead of 60 so you can confirm the whole thing works before leaving the full run going. The
+Streamlit dashboard is the easiest way to read a run: the two configs side by side, and per
+question the retrieved chunks, the answer, and what each judge said about it.</p>
+
+<h2>Known gaps</h2>
+
+<ul>
+  <li>The judge is small, and it wrote the gold set. A hand-curated set would be better.</li>
+  <li>Only two configurations ship, not a sweep.</li>
+  <li>The embedder is fixed across both, so it is not part of the comparison.</li>
+</ul>
+
+<p>If I took this further, the next thing would be a grid of configurations plotting quality
+against latency — because that curve is the answer the harness was built to produce, and two
+points is not a curve.</p>
+
+<div class="note">
+<p><strong>A note on Intel Macs.</strong> torch stops at 2.2.2 on Intel macOS, which forces
+<code>numpy&lt;2</code> and older transformers and sentence-transformers. Those versions are
+pinned in <code>pyproject.toml</code>, so a clean install works instead of walking into the
+compatibility wall.</p>
+</div>
+
+<div class="pn">
+  <a href="rsna-knee.html"><span class="lbl">Previous</span>← RSNA knee MRI</a>
+  <a href="jobpilot.html"><span class="lbl">Next</span>JobPilot →</a>
+</div>
+
+</div>
+</article>
+
+<div class="wrap">
+  <footer>
+    <span>Marko Isotupa — Leuven, Belgium</span>
+    <span><a href="mailto:marko.isotupa01@gmail.com">email</a> · <a href="https://github.com/isotupa">github</a> · <a href="https://linkedin.com/in/isotupa">linkedin</a></span>
+  </footer>
+</div>
+
+</body>
+</html>

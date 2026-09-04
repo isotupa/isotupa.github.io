@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A grey-box virtual torque sensor — Marko Isotupa</title>
+<meta name="description" content="Master's thesis with Wahoo Fitness: replacing a factory-calibrated lookup table with a physics model plus a learned residual, with a reject option and a cross-machine transfer test.">
+<link rel="stylesheet" href="../assets/css/site.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◈</text></svg>">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="home" href="../index.html">← marko&nbsp;isotupa</a>
+    <div class="links"><a href="../index.html#projects">All projects</a></div>
+  </div>
+</nav>
+
+<header class="art-head">
+  <div class="wrap">
+    <div class="kicker">Master's thesis · KU Leuven with Wahoo Fitness</div>
+    <h1>A grey-box virtual torque sensor for a smart bike trainer</h1>
+    <p class="standfirst">Wahoo's CORE2 estimates a rider's power from a lookup table that takes
+    a long factory calibration campaign to fill in, and has to be rebuilt from scratch whenever
+    the hardware changes. I tried to learn it instead — without giving up the physics.</p>
+    <div class="meta">
+      <div><div class="k">Role</div><div class="v">Sole author. Data pipeline, modelling, experiments and write-up.</div></div>
+      <div><div class="k">Partner</div><div class="v">Wahoo Fitness, who supplied the dynamometer recordings from two production units.</div></div>
+      <div><div class="k">Stack</div><div class="v">Python, pandas, NumPy, scikit-learn, XGBoost, SHAP</div></div>
+      <div><div class="k">When</div><div class="v">2025–2026</div></div>
+    </div>
+  </div>
+</header>
+
+<article>
+<div class="wrap">
+
+<h2>The problem</h2>
+
+<p>A smart indoor trainer replaces the rear wheel of a bicycle and generates resistance
+electromagnetically. The number it reports to Zwift and the rest of the cycling e-sports world
+is power, and power is cadence times torque. Cadence is cheap and reliable to measure. Torque
+is the hard one: you either fit a strain gauge, which is accurate and expensive, or you infer
+it from the internal state of the brake, which is what the CORE2 does.</p>
+
+<p>The CORE2's inference is a static lookup table mapping kinematic and electrical states —
+flywheel speed, brake current — to torque values. It works. Its cost is that the table is
+produced by a long factory calibration campaign, and it is static: a minor mechanical revision
+means rebuilding the whole thing. On top of that, mass production introduces unit-to-unit
+variation, so one table applied to every machine gives biased readings on some of them.</p>
+
+<p>The physics is not clean either. Components heat up during a ride, their electrical
+resistance shifts, and the magnetic behaviour of the brake changes with temperature. A purely
+physical white-box model handles the kinematics well and breaks down on those non-linearities.
+A purely data-driven black-box model fits the non-linearities and occasionally returns
+physically impossible values, such as negative drag.</p>
+
+<blockquote>The question the thesis asks: can you build an architecture that sits between those
+two extremes and produces a virtual sensor that is both accurate and reliable?</blockquote>
+
+<figure>
+  <img src="../assets/img/thesis/dyno.jpg" alt="The test bench: an external dynamometer mounted directly above the Wahoo CORE2 trainer.">
+  <figcaption>The test bench. The external dynamometer (top) is connected directly to the input
+  hub of the CORE2 (bottom). A human rider cannot generate this data, because then the true
+  torque would be unmeasurable — so every recording comes from the dynamometer driving the
+  trainer through scripted protocols.</figcaption>
+</figure>
+
+<h2>Getting the data to a state where physics applies</h2>
+
+<p>The inertial term in the torque balance is <code>T = I·α</code>, and α is an angular
+acceleration obtained by differentiating a low-rate speed signal. Differentiation amplifies
+noise, so anything wrong with the raw streams gets worse before it gets used. Four things were
+wrong with them, and each needed its own step.</p>
+
+<p><strong>The dynamometer's torque channel has an offset that drifts.</strong> The drift is
+estimated during isolated spindown events, where the true torque is known to be near zero, and
+interpolated linearly between them. Getting the estimate right at each spindown took some care:
+the single minimum reading is too sensitive to one undershooting sample, and a median tracks
+the noise floor, so the estimate takes the maximum of the three lowest readings at the end of
+the segment.</p>
+
+<figure>
+  <img src="../assets/img/thesis/offset_correct.png" alt="Raw torque signal in grey with a visible offset, and the corrected signal in blue.">
+  <figcaption>The raw torque signal (grey) carries an offset that the correction removes (blue).
+  This turned out to be the single most valuable preprocessing step, because the offset is in
+  the target variable — a model trained against a biased target inherits the bias.</figcaption>
+</figure>
+
+<p><strong>The internal sensors trail the dynamometer.</strong> When the rig changes load or
+speed, the trainer's own telemetry registers it a few samples later. Both speed signals are
+mean-centred and cross-correlated, and every internal column is shifted by the lag that
+maximises the correlation. On the validation recording the lag was 8 samples, and the
+correlation between the two speed signals went from 0.981 to 0.994. The lag is session
+dependent, so it is recomputed per recording rather than fixed once.</p>
+
+<p><strong>Speed steps produce transients the sensor cannot resolve.</strong> After a sudden
+speed change the torque trace goes briefly erratic. The dynamics themselves are understood;
+the recordings simply undersample them, so what is left is an aliased trace with no signal in
+it. Any sample-to-sample jump above 5 Nm flags the following 3 seconds for removal. A rider on
+a deployed trainer does not produce step changes of that character anyway.</p>
+
+<p><strong>Spikes survive all of that.</strong> A rolling median filter flags points more than
+2.5 Nm away from the local median and replaces them. Measured over a steady-state hold, the
+standard deviation of the torque signal drops from 0.134 to 0.039 — which is roughly the
+difference between sensor noise and the underlying physical resistance.</p>
+
+<figure>
+  <img src="../assets/img/thesis/despike.png" alt="Torque timeline in black with spike samples marked in red.">
+  <figcaption>Spikes identified by the despiker (red) on a torque timeline (black). None of
+  these correspond to a change in the hardware.</figcaption>
+</figure>
+
+<p>Applied in sequence, the pipeline takes the final model from R² = 0.613 on raw data to
+R² = 0.907, with the offset correction responsible for most of that. I also tried RANSAC to
+throw out outliers in the coasting data before fitting the drag model. It made things
+noticeably worse — R² fell from 0.93 to 0.79 — because there are only about 8,000 coasting
+rows to begin with and filtering them further removes the relationships the fit depends on.</p>
+
+<h2>The architecture</h2>
+
+<p>The total torque splits into two physically distinct things: passive mechanical losses that
+exist whenever the flywheel turns, and the electromagnetic braking torque that the machine
+applies on purpose. So the model splits the same way.</p>
+
+<pre><code>T_total  =  T_drag           +  T_brake
+            └─ NNLS ─┘          └─ physics + XGBoost residual ─┘
+               D·ω² + C            k·i²·ω·σ(T)  +  learned correction</code></pre>
+
+<p>The drag half is a non-negative least squares fit of two coefficients: a windage term
+proportional to ω² and a Coulomb friction constant. NNLS rather than an unconstrained fit
+because a negative drag coefficient is not a thing, and an unconstrained learner will happily
+produce one. The fitted values were D = 4.36 × 10⁻⁶ Nm·s²/rad² and C = 0.564 Nm. Both land in
+a physically plausible range: rotating-disk aerodynamics gives a free-disk lower bound about
+50× below the fitted windage, which is the sort of amplification an enclosed disk geometry
+produces, and bearing friction plus belt tension predict a Coulomb term around 0.55 Nm.</p>
+
+<figure>
+  <img src="../assets/img/thesis/drag_curve.png" alt="Drag torque against flywheel speed, decomposed into a windage component and a constant Coulomb component.">
+  <figcaption>The drag curve for unit 717B, split into the windage term D·ω² and the constant
+  Coulomb friction C. At low speed windage accounts for 8% of total drag; at the top of the
+  operating range it is 35%.</figcaption>
+</figure>
+
+<p>The braking half starts from a single-term eddy-current expression and gives XGBoost the
+residual to learn. That ordering matters: the learner never predicts torque directly, only the
+part the physics failed to explain, so its output is bounded by how wrong the physics was.
+Hyperparameters came from a 25-iteration randomised search with 3-fold cross-validation. There
+is no early stopping — the full estimator budget is spent and overfitting is held back with
+<code>min_child_weight</code>, <code>reg_lambda</code> and <code>gamma</code> instead.</p>
+
+<h2>Does the hybrid actually beat either half?</h2>
+
+<p>Evaluated on the braking residual over the steady-state braking subset:</p>
+
+<div class="stats">
+  <div><div class="n">−0.89</div><div class="l">Mean predictor, R²</div></div>
+  <div><div class="n">0.369</div><div class="l">Pure physics, R²</div></div>
+  <div><div class="n">0.850</div><div class="l">Pure ML, R²</div></div>
+  <div><div class="n">0.924</div><div class="l">Hybrid, R²</div></div>
+</div>
+
+<p>MAE follows the same order: 4.82, 4.63, 2.63 and 1.84 Nm. The wider comparison, run on the
+full steady-state validation set of 8,996 rows with the same NNLS drag baseline under all of
+them, is the more informative table:</p>
+
+<div class="tw">
+<table>
+<thead><tr><th>Braking residual model</th><th class="num">R²</th><th class="num">MAE (Nm)</th><th class="num">RMSE (Nm)</th><th class="num">Bias (Nm)</th></tr></thead>
+<tbody>
+<tr><td>Mean predictor</td><td class="num">−0.89</td><td class="num">7.08</td><td class="num">10.02</td><td class="num">+6.89</td></tr>
+<tr><td>Single-term NNLS</td><td class="num">0.472</td><td class="num">4.06</td><td class="num">5.28</td><td class="num">+3.97</td></tr>
+<tr><td>Multi-term NNLS (4 physical features)</td><td class="num">0.866</td><td class="num">2.16</td><td class="num">2.66</td><td class="num">+1.88</td></tr>
+<tr><td>Random Forest</td><td class="num">0.910</td><td class="num">1.96</td><td class="num">2.18</td><td class="num">+1.80</td></tr>
+<tr><td>Gradient boosting machine</td><td class="num">0.883</td><td class="num">2.08</td><td class="num">2.49</td><td class="num">+1.76</td></tr>
+<tr class="hl"><td>XGBoost residual (proposed)</td><td class="num">0.934</td><td class="num">1.68</td><td class="num">1.87</td><td class="num">+1.56</td></tr>
+<tr><td>End-to-end XGBoost, no decomposition</td><td class="num">0.888</td><td class="num">2.26</td><td class="num">2.44</td><td class="num">+2.18</td></tr>
+<tr><td>Trainer's own FTMS output (the production LUT)</td><td class="num">0.972</td><td class="num">1.06</td><td class="num">1.21</td><td class="num">−1.05</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>Two rows are worth pausing on. The multi-term NNLS beating the single-term one by a wide
+margin says the extra physical features carry real content rather than decoration. And an
+XGBoost trained end-to-end on total torque, with access to exactly the same raw features, does
+worse than the decomposed version — the explicit split into drag and brake helps the learner
+more than it would have managed to find on its own.</p>
+
+<figure>
+  <img src="../assets/img/thesis/prediction.png" alt="Predicted torque plotted against measured torque over the validation timeline.">
+  <figcaption>The hybrid model's prediction over the accuracy-validation timeline. The shape is
+  tracked closely; the visible gap is the systematic bias that Experiment 7 goes after.</figcaption>
+</figure>
+
+<h2>Has it learned physics, or memorised a dataset?</h2>
+
+<p>This matters more than the accuracy number, because a model that has memorised the training
+grid will not transfer to another unit. Gain and SHAP both say the same thing, and they say
+something a physicist would recognise.</p>
+
+<p>Flywheel speed ω is the most informative feature: in a hysteresis brake, faster rotation
+raises the rate of flux change across the magnetic circuit, so the induced currents and the
+resulting torque go up with it. Second is <code>i²/√ω</code>. The i² factor is the coil
+current entering through the flux, which scales linearly with current, and the force, which
+scales with B². The 1/√ω factor is the skin effect: at higher speed the induced currents crowd
+towards the surface of the iron flywheel, so the effective conductor cross-section — and the
+torque's dependence on speed — falls.</p>
+
+<figure>
+  <img src="../assets/img/thesis/shap.png" alt="SHAP summary plot for the braking residual model.">
+  <figcaption>SHAP summary for the residual model. The x-axis is the contribution to the output
+  in Nm; colour is the feature value, red high and blue low. High flywheel speed pushes the
+  prediction up by as much as 7.5 Nm, low speed pulls it down — which is the direction the
+  physics requires.</figcaption>
+</figure>
+
+<h2>Knowing when to keep quiet</h2>
+
+<p>The residual model is still bounded by its training envelope. On a thermal state it never
+saw, it can extrapolate badly and hand back a physically impossible number, with no signal that
+anything went wrong. So the system needs a reject option: when an input looks out of
+distribution, the XGBoost stage is bypassed and the prediction falls back to the physics-only
+drag estimate <code>D·ω² + C</code>, which has two learned parameters and is interpretable
+whatever the input.</p>
+
+<p>Four unsupervised detectors were fitted on the same training features and compared by
+coverage–MAE curve against a random-rejection baseline averaged over 200 trials. Integrated
+gain over the coverage range, in Nm:</p>
+
+<div class="tw">
+<table>
+<thead><tr><th>Detector</th><th class="num">Integrated gain (Nm)</th></tr></thead>
+<tbody>
+<tr class="hl"><td>Local Outlier Factor</td><td class="num">+0.123</td></tr>
+<tr><td>Interquartile range</td><td class="num">+0.120</td></tr>
+<tr><td>Mahalanobis distance</td><td class="num">+0.026</td></tr>
+<tr><td>Isolation Forest</td><td class="num">−0.029</td></tr>
+</tbody>
+</table>
+</div>
+
+<figure>
+  <img src="../assets/img/thesis/ood_mae.png" alt="Coverage versus MAE curves for four out-of-distribution detectors against a random rejection baseline.">
+  <figcaption>Coverage–MAE curves. The x-axis runs from accepting everything to accepting only
+  the least anomalous samples; the flat line is random rejection.</figcaption>
+</figure>
+
+<p>Isolation Forest doing worse than random is the interesting result, and it is not a bug. The
+detector isolates points by rarity in feature space, but the dynamometer protocols sweep the
+operating envelope deliberately, so the rare combinations — plateau corners, brief transitions
+between speed steps — are physically valid states the model has already learned. It rejects
+the samples the model handles well and keeps the hard ones.</p>
+
+<p>LOF and IQR land within 0.003 Nm of each other by completely different mechanisms. My
+recommendation for deployment is IQR anyway: on a device this small, the tiny loss in
+integrated gain is repaid many times over in memory, latency and the ability to explain what
+the detector did.</p>
+
+<h2>Does it transfer to another machine?</h2>
+
+<p>Everything above is fitted on one unit, 717B. The whole point of learning physical
+parameters rather than a table is that they should mean something on a different machine. The
+trained model was applied to a second unit, 335C, with no retraining at all.</p>
+
+<div class="stats">
+  <div><div class="n">0.859</div><div class="l">Zero-shot R² on unit 335C</div></div>
+  <div><div class="n">1.78 Nm</div><div class="l">Zero-shot MAE</div></div>
+  <div><div class="n">+1.63 Nm</div><div class="l">Systematic bias</div></div>
+  <div><div class="n">0.909</div><div class="l">R² after a one-constant correction</div></div>
+</div>
+
+<figure>
+  <img src="../assets/img/thesis/xmachine_val.png" alt="Predicted and true torque on the second production unit, showing a constant offset between them.">
+  <figcaption>Cross-machine validation on unit 335C. The prediction (dotted orange) holds the
+  shape of the true torque (black) but sits consistently below it.</figcaption>
+</figure>
+
+<p>The finding is in the shape of the error rather than its size. A single additive constant
+closes most of the gap, which means the functional form of the torque curve transferred between
+units and only the offset did not. That is consistent with a mechanical friction difference or
+a slightly different magnetic air gap, and it sketches what a minimal end-of-line calibration
+would have to do: fit one number, not a table. The caveat is that the bias was fitted on the
+full 335C timeline rather than a held-out split, so treat the corrected figure as an upper
+bound on what one parameter can buy.</p>
+
+<h2>Two things that did not work</h2>
+
+<p><strong>Estimating the moment of inertia from the data.</strong> <code>I</code> is currently
+a constant supplied by the manufacturer, and production tolerances mean the true value varies
+between units. Isolating segments where the brake is off and acceleration is positive turns
+<code>I = (T_total − T_mech)/α</code> into a regression. It did not help. The estimate is
+erratic because α comes from differentiating a low-rate signal and the calculation then divides
+by it. On the coasting window where the inertial term dominates, the estimated and the supplied
+inertia give R² = 0.8718 and 0.8717 — the noise in α drowns out whatever correction was there.</p>
+
+<p><strong>Smoothing the output.</strong> A causal rolling median removes jitter, and costs more
+than it saves: at a window of 7 samples MAE rises from 1.68 to 1.77 Nm and R² falls from 0.934
+to 0.886, because the filter introduces about three samples of lag. Every window size tested
+traded the same way.</p>
+
+<p>What did work post-hoc was the boring option. A constant bias correction of +1.42 Nm cuts
+MAE from 1.68 to 0.877 Nm and lifts R² to 0.962, and the fraction of predictions landing within
+5% of ground truth goes from 4% to 49%. A physics-grounded version of the same correction —
+modelling the residual as friction across an extra interface between the brake hub and the
+dynamometer output shaft, with separate driven and coasting coefficients — was fitted on
+training data alone and still reached R² = 0.916 without touching the validation set.</p>
+
+<h2>Where it ends up</h2>
+
+<p>Against the production lookup table, the hybrid model has a lower MAE, a marginally lower R²
+and a higher RMSE. The LUT still wins on the tails of the error distribution, and I would not
+claim otherwise. What the hybrid gives that the LUT cannot is a clean separation into drag and
+brake components, which is what made the physically grounded features useful and the
+cross-unit transfer possible at all, and a reject option that catches implausible predictions
+on inputs the model has not seen.</p>
+
+<div class="note">
+<p><strong>On the numbers.</strong> All metrics are single-run point estimates rather than
+averages over seeds. XGBoost's tree-construction stochasticity carries an implicit variability
+of roughly ±0.005–0.01 in R², which is comparable to some of the gaps between candidate models
+in the table above.</p>
+</div>
+
+<div class="pn">
+  <a href="../index.html#projects"><span class="lbl">Back to</span>All projects</a>
+  <a href="rsna-knee.html"><span class="lbl">Next</span>RSNA knee MRI →</a>
+</div>
+
+</div>
+</article>
+
+<div class="wrap">
+  <footer>
+    <span>Marko Isotupa — Leuven, Belgium</span>
+    <span><a href="mailto:marko.isotupa01@gmail.com">email</a> · <a href="https://github.com/isotupa">github</a> · <a href="https://linkedin.com/in/isotupa">linkedin</a></span>
+  </footer>
+</div>
+
+</body>
+</html>

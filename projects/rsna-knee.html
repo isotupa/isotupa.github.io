@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Twelve findings from one knee MRI — Marko Isotupa</title>
+<meta name="description" content="RSNA knee abnormality detection: deriving labels from nine-language radiology reports, recovering slice order from DICOM geometry, and per-diagnosis attention over MRI sequence slots.">
+<link rel="stylesheet" href="../assets/css/site.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◈</text></svg>">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="home" href="../index.html">← marko&nbsp;isotupa</a>
+    <div class="links"><a href="../index.html#projects">All projects</a></div>
+  </div>
+</nav>
+
+<header class="art-head">
+  <div class="wrap">
+    <div class="kicker">Kaggle · RSNA Knee Abnormality Detection</div>
+    <h1>Twelve findings from one knee MRI</h1>
+    <p class="standfirst">Each study is a set of MRI series acquired in one session, and the
+    task is to give it twelve probabilities. Almost none of the work that mattered was in the
+    network.</p>
+    <div class="meta">
+      <div><div class="k">Role</div><div class="v">Solo entry. Label extraction, DICOM pipeline, model and validation design.</div></div>
+      <div><div class="k">Stack</div><div class="v">PyTorch, pydicom, DINOv2, NumPy, pandas</div></div>
+      <div><div class="k">When</div><div class="v">2026</div></div>
+    </div>
+  </div>
+</header>
+
+<article>
+<div class="wrap">
+
+<h2>What the score rewards, and what that removes</h2>
+
+<p>The score is the unweighted mean of twelve per-label ROC AUCs — anterior cruciate and medial
+collateral ligament injury, medial and lateral meniscal tear, osteoarthritis in each of three
+compartments, effusion, synovitis, Baker's cyst, bone contusion, fracture. Three consequences
+follow, and each one deletes a design decision rather than opening it.</p>
+
+<p><strong>Only order matters.</strong> AUC is invariant under any strictly increasing map of
+a label's scores, so calibration and thresholds are worth nothing. It also settles how to
+ensemble: averaging raw probabilities lets whichever model is most confident dominate, whereas
+averaging <em>ranks</em> combines the only information the metric reads. Every submission in
+this pipeline is written as per-column ranks, and the final file is a rank mean over 20
+members.</p>
+
+<p><strong>Every label costs the same.</strong> A label left at chance contributes 0.5 instead
+of roughly the mean AUC a good model reaches, forfeiting about a twelfth of the gap however
+well the other eleven do. At a mean of 0.85 that is 0.029 of final score. Rare findings
+therefore deserve more attention than common ones, which is the opposite of where effort
+naturally goes.</p>
+
+<h2>Where the targets come from</h2>
+
+<p>Only a small subset of training studies carry the twelve per-condition labels. Every
+training study carries the original radiology report.</p>
+
+<p>The decisive fact is in the schemas rather than the prose: <code>train.csv</code> has a
+<code>Report</code> column and <code>test.csv</code> does not. Text is available when fitting
+and absent when predicting. That rules out a fusion model with a text branch — at inference it
+would have nothing to read — and leaves the reports usable only as training targets, or as a
+weight on how confidently a study could be read. I use them as both.</p>
+
+<h3>Reading a report in nine languages</h3>
+
+<p>The reports arrive in English, Spanish, French, Dutch, German, Turkish, Croatian/Serbian,
+Greek and Bulgarian/Russian, and nothing says which. The obvious move is to identify the
+language and route to a per-language extractor. I did not, and the reason is that cheap
+identification fails badly: substring tests like <code>'la '</code> for French match Spanish
+just as often, and whichever test runs first swallows both. Committing to a guess before any
+evidence is read is worse than not guessing.</p>
+
+<p>So every cue lexicon carries all nine languages at once and each clause is tested against
+the union. Greek and Cyrillic cues cannot collide with Latin-script ones, and the Latin-script
+vocabularies here are close enough that a shared cue is usually right. The price is paid in
+coverage rather than in precision.</p>
+
+<p>Normalisation comes first, then segmentation, then scoping. Case, diacritics and separators
+are folded up front, which also repairs a real encoding problem: many Greek reports spell mu
+with the MICRO SIGN U+00B5 rather than U+03BC, and NFKD decomposition maps one onto the other.
+Turkish dotted and dotless i have to be folded <em>before</em> casefolding or
+<code>İZLENMEZ</code> and <code>izlenmez</code> diverge into two different words.</p>
+
+<pre><code>NEGATION  no · not · without · sin · ausencia · pas de · sans · geen
+          keine · ohne · yok · izlenmemekte · nema · bez · δεν · χωρις · няма
+
+ANAT/ACL  anterior cruciate · acl · cruzado anterior · lca · croise anterieur
+          voorste kruisband · vkb · vorderes kreuzband · on capraz · ocb
+          prednji krizni · χιαστ* · предна кръстна</code></pre>
+
+<p>Scope for a negator is the whole clause, not a character window. A window mis-scopes across
+languages with different word order — Turkish puts its negator at the end of the sentence and
+English at the front — and clause segmentation already keeps statements short enough that the
+whole clause is the right unit. Each match comes out as an assertion, a negation or a hedge,
+and the extractor emits a score together with a confidence.</p>
+
+<h2>What the scanner actually recorded</h2>
+
+<p><code>train_series.csv</code> describes each series with an anatomical plane and two binary
+flags, <code>Fluid_Sensitive</code> and <code>Fat_Suppression</code>. The names denote two
+physically independent properties, and that independence is exactly what the delivered columns
+do not have: across the training series the two agree on every row. As given they carry one
+axis where there should be two.</p>
+
+<p>Both are recoverable from the DICOM header. Fluid sensitivity is a property of the contrast
+weighting, set by repetition and echo time — T1 below roughly 800 ms TR, T2 above it with a
+long TE, proton density above it with a short one — with gradient echo breaking the rule and
+settled by <code>ScanningSequence</code> first. Fat suppression is a preparation applied on top
+of any weighting, and it is what makes marrow oedema conspicuous.</p>
+
+<h3>A bug that produces no error</h3>
+
+<p>A series is a directory of files, and the obvious way to walk it is to sort the filenames.
+That is wrong here, and wrong silently. The filename is the SOP Instance UID, assigned to be
+unique rather than ordered, so sorting by it yields a sequence uncorrelated with anatomy —
+measured on a series from this corpus, the rank correlation between filename order and
+physical position is about 0.01.</p>
+
+<p>Three things downstream depend on that order. Three adjacent slices stacked as three
+channels become three unrelated cross-sections. The middle of the stack becomes a random
+subset. And reversing the order to normalise laterality does nothing at all.</p>
+
+<p>The true order is recoverable exactly from geometry every slice already carries.
+<code>ImageOrientationPatient</code> gives the in-plane axes, <code>ImagePositionPatient</code>
+the position of the first voxel, and the projection of the position onto their cross product
+increases monotonically along the stack.</p>
+
+<h2>Two constraints on the pixels</h2>
+
+<p><strong>Physical scale, not pixel count.</strong> A slice of N × N pixels with spacing
+<em>s</em> mm covers N·s millimetres of anatomy, and both vary across this corpus, so a
+fixed-pixel resize hands the encoder images whose physical scale differs by a factor of
+several. Cropping to a constant millimetre extent and then resampling to a fixed pixel count
+fixes the pitch instead.</p>
+
+<p><strong>A feature narrower than two pixels does not survive the resize.</strong> That is
+Nyquist applied to the resampling grid: representing a structure <em>d</em> mm wide requires an
+effective pitch of at most d/2. A meniscal tear is one to three millimetres, so at the low end
+the pitch has to be 0.5 mm or better — and if it is not, no amount of capacity downstream
+recovers the signal, because it was destroyed before the first convolution. This is a property
+of the resize, not of the network.</p>
+
+<h3>Normalising left and right</h3>
+
+<p>Four of the twelve targets are medial/lateral pairs and a fifth is named for the side it
+lies on. Medial and lateral are defined relative to the body's midline, so which side of the
+<em>image</em> they fall on depends on which knee was scanned. Left unnormalised, those five
+labels learn from an axis the model cannot observe.</p>
+
+<p>The correction differs by plane. Coronally and axially the medial–lateral direction lies in
+the image plane, so flipping the last axis maps one knee onto the other. Sagittally it is the
+slice axis: each slice is unchanged by mirroring, and what differs is the direction in which
+the stack traverses the joint, so the slice order is reversed instead.</p>
+
+<p><code>Laterality</code> is a Type 2C attribute — it may legitimately be absent, and here it
+is absent on half the studies, by whole vendors rather than scattered series. Leaving those
+alone silently declares them left-sided, so every right knee among them enters the model
+mirrored. Recovering the side from the patient-space geometry is what makes the normalisation
+worth doing at all.</p>
+
+<h2>Aggregating sequences into twelve decisions</h2>
+
+<p>A study arrives as up to six slot embeddings with a presence mask. Pooling them identically
+would throw away the reason the protocol has three planes in the first place: cruciates are
+read sagittally, collateral ligaments and the meniscal body coronally, patellar cartilage
+axially. A mean over slots dilutes the one carrying the evidence with five that do not.</p>
+
+<figure class="dark">
+<svg viewBox="0 0 720 300" role="img" aria-label="Diagram: six sequence slots feed a shared encoder, producing slot embeddings; each of twelve diagnoses has its own query attending over the present slots through a masked softmax to a logit." xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block;background:#15171a;border-radius:8px">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 10 5 0 10z" fill="#6f757d"/></marker>
+  </defs>
+  <g font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#969ba3">
+    <text x="24" y="30" fill="#e0a955" font-size="10" letter-spacing="1.2">SLOTS</text>
+    <text x="238" y="30" fill="#e0a955" font-size="10" letter-spacing="1.2">SHARED ENCODER</text>
+    <text x="470" y="30" fill="#e0a955" font-size="10" letter-spacing="1.2">PER-DIAGNOSIS ATTENTION</text>
+
+    <g stroke="#262a30" fill="#1b1e22">
+      <rect x="24" y="46" width="138" height="26" rx="4"/>
+      <rect x="24" y="80" width="138" height="26" rx="4"/>
+      <rect x="24" y="114" width="138" height="26" rx="4"/>
+      <rect x="24" y="148" width="138" height="26" rx="4"/>
+      <rect x="24" y="182" width="138" height="26" rx="4"/>
+      <rect x="24" y="216" width="138" height="26" rx="4" stroke-dasharray="3 3"/>
+    </g>
+    <text x="36" y="63">sagittal PD</text>
+    <text x="36" y="97">sagittal PD FS</text>
+    <text x="36" y="131">coronal PD</text>
+    <text x="36" y="165">coronal fluid FS</text>
+    <text x="36" y="199">axial PD FS</text>
+    <text x="36" y="233" fill="#5c6167">axial · absent</text>
+    <text x="24" y="264" fill="#6f757d" font-size="10">3 slices → 3 channels</text>
+
+    <g stroke="#6f757d" fill="none" marker-end="url(#a)">
+      <path d="M166 59 H238"/><path d="M166 93 H238"/><path d="M166 127 H238"/>
+      <path d="M166 161 H238"/><path d="M166 195 H238"/>
+    </g>
+
+    <rect x="242" y="46" width="118" height="162" rx="6" fill="#1b1e22" stroke="#262a30"/>
+    <text x="301" y="112" text-anchor="middle" fill="#e4e6e9">DINOv2 ViT</text>
+    <text x="301" y="130" text-anchor="middle" font-size="10">last 6 of 12 blocks</text>
+    <text x="301" y="145" text-anchor="middle" font-size="10">trainable · 10.7M</text>
+    <text x="301" y="228" text-anchor="middle" font-size="10">→ 6 × 768-d embeddings</text>
+
+    <g stroke="#6f757d" fill="none" marker-end="url(#a)"><path d="M364 127 H424"/></g>
+
+    <rect x="428" y="46" width="150" height="162" rx="6" fill="#1b1e22" stroke="#262a30"/>
+    <text x="503" y="98" text-anchor="middle" fill="#e4e6e9">query q₀ … q₁₁</text>
+    <text x="503" y="120" text-anchor="middle" font-size="10">masked softmax over</text>
+    <text x="503" y="135" text-anchor="middle" font-size="10">present slots only</text>
+    <text x="503" y="160" text-anchor="middle" font-size="10" fill="#7ec8b5">c = Σ α·h</text>
+
+    <g stroke="#6f757d" fill="none" marker-end="url(#a)"><path d="M582 127 H628"/></g>
+
+    <g stroke="#262a30" fill="#1b1e22">
+      <rect x="632" y="86" width="64" height="20" rx="3"/>
+      <rect x="632" y="112" width="64" height="20" rx="3"/>
+      <rect x="632" y="138" width="64" height="20" rx="3"/>
+    </g>
+    <text x="664" y="100" text-anchor="middle" font-size="10">ACL</text>
+    <text x="664" y="126" text-anchor="middle" font-size="10">MCL</text>
+    <text x="664" y="152" text-anchor="middle" font-size="10">…×12</text>
+    <text x="664" y="180" text-anchor="middle" font-size="10">logits</text>
+  </g>
+</svg>
+<figcaption>Each diagnosis carries its own query and attends over whichever slots the study
+actually contains. The masked softmax renormalises over the present ones, so a missing axial
+series shifts a diagnosis's attention onto the sequences that are there rather than feeding it
+a zero vector.</figcaption>
+</figure>
+
+<p>The head is deliberately this small. The label is attached to the <em>study</em>, so nothing
+in the supervision says which part of a study carries the evidence. Attention parameters below
+the slot level would have nothing to learn from and would spend their capacity fitting noise.</p>
+
+<h3>Why the encoder is trained rather than frozen</h3>
+
+<p>A frozen self-supervised encoder puts a ceiling on everything downstream. Resolution,
+encoder size, slice coverage and slot aggregation change how much the model looks and how
+closely, but none of them changes the vocabulary it looks <em>with</em> — and that ceiling
+should be expected to bind here, because the encoder learned its features from natural images,
+where nothing resembles the signal a torn meniscus makes on a proton-density sequence.</p>
+
+<p>So the encoder is adapted, under two restraints. Only the last blocks move: early blocks of
+a vision transformer are generic edge and texture filters, late blocks are where semantics live,
+and there may not be enough supervision here to improve the early ones while there is certainly
+enough to damage them. And the encoder learns far more slowly than the head — the head is
+random at initialisation and has everything to learn, the encoder starts from a good solution
+and only needs moving off it. A single learning rate leaves the head untrained or destroys the
+encoder within a few hundred steps.</p>
+
+<h3>Augmentations I deliberately did not use</h3>
+
+<p>Neither flip is available, for different reasons. A horizontal flip would reintroduce the
+nuisance axis the laterality normalisation just removed — it undoes, once per batch, what the
+whole header pass exists to establish. A vertical flip is not a nuisance axis at all: a knee is
+acquired in a canonical orientation and no study here looks like its own vertical mirror. An
+augmentation is meant to cover directions along which the label does not change, and where a
+finding sits in the frame is information rather than noise — a Baker's cyst is identified by
+lying in the popliteal fossa, not by its appearance alone.</p>
+
+<p>What is left is jitter no label depends on: a few degrees of rotation, a few per cent of
+scale and translation.</p>
+
+<h2>Validating without fooling yourself</h2>
+
+<p>Two leaks are specific to this setup, and both inflate a validation number without improving
+anything.</p>
+
+<p><strong>Shared reports.</strong> Some reports are byte-identical across studies — a template
+read for an unremarkable knee — so every study in such a group receives the same derived target
+vector. Splitting a group across the divide scores the model on a target whose source it was
+trained on. Studies are assigned by a hash of the report text instead, which keeps every
+duplicate group whole. One fifth is held out, and the split is fixed rather than rotated.</p>
+
+<p><strong>Two references that mean different things.</strong> The holdout measures agreement
+with the derived targets and has enough studies per label to separate a real difference from
+noise, so it selects both the epoch within a run and the recipe between runs. The annotation
+check measures agreement with a radiologist's reading of the images, which is what the
+competition actually scores — but only annotated studies falling inside the holdout can be
+used, and there are very few. It is reported and never allowed to arbitrate.</p>
+
+<h3>One more failure that produces predictions instead of errors</h3>
+
+<p>Weights loaded but read through the wrong preprocessing do not raise anything. The
+submission is well formed, the log says nothing, and the difference is a number no output of
+the run reveals. Scaling that never happens, or happens twice, is enough on its own and changes
+no shape anywhere.</p>
+
+<p>So every set of weights carries a fingerprint: the model's output on a fixed synthetic bag
+generated from a seed rather than read from disk, pushed through the entire forward path —
+byte scaling, ImageNet normalisation, resize, encoder, slot attention. Any of those differing
+moves the output by order one; numerics differing between two GPUs move it by about 1e-5. The
+tolerance sits at 2e-3, between the two. Every member in the final run reported a match within
+5e-6.</p>
+
+<div class="note">
+<p><strong>What this entry is and is not.</strong> The submission is a rank mean of 20 members
+trained off-platform and read back in as a dataset, because nothing requires the scored run to
+be the run that learned the weights — and training inside the notebook caps the model at what
+one accelerator fits in the time limit, then spends that time again on every resubmission for a
+result that does not change. The label extractor and the pipeline decisions above are the parts
+I would defend; the ensemble is bookkeeping.</p>
+</div>
+
+<div class="pn">
+  <a href="wahoo-torque.html"><span class="lbl">Previous</span>← Grey-box torque sensor</a>
+  <a href="ros2-rag.html"><span class="lbl">Next</span>ROS2 RAG →</a>
+</div>
+
+</div>
+</article>
+
+<div class="wrap">
+  <footer>
+    <span>Marko Isotupa — Leuven, Belgium</span>
+    <span><a href="mailto:marko.isotupa01@gmail.com">email</a> · <a href="https://github.com/isotupa">github</a> · <a href="https://linkedin.com/in/isotupa">linkedin</a></span>
+  </footer>
+</div>
+
+</body>
+</html>

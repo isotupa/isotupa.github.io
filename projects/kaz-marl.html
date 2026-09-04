@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi-agent learning and Knights Archers Zombies — Marko Isotupa</title>
+<meta name="description" content="Replicator dynamics of Boltzmann and lenient Boltzmann Q-learning on canonical games, then PPO agents for the cooperative Knights Archers Zombies environment.">
+<link rel="stylesheet" href="../assets/css/site.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◈</text></svg>">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="home" href="../index.html">← marko&nbsp;isotupa</a>
+    <div class="links"><a href="../index.html#projects">All projects</a></div>
+  </div>
+</nav>
+
+<header class="art-head">
+  <div class="wrap">
+    <div class="kicker">KU Leuven · Machine Learning: Project · 2025</div>
+    <h1>From matrix games to Knights Archers Zombies</h1>
+    <p class="standfirst">Two halves that turn out to be the same subject: what learning
+    dynamics look like when you can draw them on a square, and what they look like when the
+    state space is too big to draw.</p>
+    <div class="meta">
+      <div><div class="k">Team</div><div class="v">With Héctor Castaños Sánchez. Work was split evenly across the literature study and the matrix games; he led the single-agent environment and I led the multi-agent one.</div></div>
+      <div><div class="k">Stack</div><div class="v">Python, NumPy, matplotlib, Ray RLlib, PettingZoo, PyTorch</div></div>
+      <div><div class="k">Scale</div><div class="v">About 82 person-hours</div></div>
+    </div>
+  </div>
+</header>
+
+<article>
+<div class="wrap">
+
+<h2>Part one: dynamics you can see</h2>
+
+<p>A two-player, two-action game has a policy space that is just the unit square — the
+probability each player assigns to their first action. That makes it the one setting where you
+can put a learning algorithm's actual trajectory on top of the theory's predicted flow and
+check whether they agree.</p>
+
+<p>The theory here is the replicator equation, which describes how a strategy's share changes
+according to how its payoff compares with the population average. Plotted as a vector field it
+shows where the dynamics push. On top of that go the empirical policy traces of agents actually
+running Q-learning.</p>
+
+<h3>Boltzmann exploration on the Stag Hunt</h3>
+
+<p>Q-learning updates action values with the usual temporal-difference rule; what changes
+between variants is how a policy is read off those values. Boltzmann exploration takes a
+softmax over the Q-values with a temperature τ — large τ flattens the distribution towards
+exploration, small τ sharpens it towards the best-valued action. Here τ decays over the run, so
+the agents explore early and commit late.</p>
+
+<figure>
+  <img src="../assets/img/kaz/boltzmann_stag_hunt.png" alt="Unit square showing the replicator vector field for the Stag Hunt, with four black learning trajectories running from green start points to red end points at the corners.">
+  <figcaption>Boltzmann Q-learning on the Stag Hunt. Grey arrows are the replicator field, green
+  dots are the hard-coded starting policies and red dots are where the agents ended up after
+  2,000 episodes. Regenerated from the project's own script.</figcaption>
+</figure>
+
+<p>The Stag Hunt has two pure Nash equilibria — both hunt the stag, or both hunt the hare — of
+which only stag/stag is Pareto optimal. The picture is a clean basin structure: the trace from
+(0.5, 0.5) and the two asymmetric starts collapse into the hare/hare corner, while the start
+already biased towards cooperation climbs to stag/stag. Nothing crosses the diagonal. That is
+risk dominance doing exactly what the theory says it does: the safe equilibrium has the larger
+basin of attraction, and where you start decides which one you get.</p>
+
+<h3>Adding leniency</h3>
+
+<p>Lenient Boltzmann Q-learning addresses a specific problem in this picture. When two agents
+learn simultaneously, a partner's exploratory mistake looks identical to a partner who has
+chosen a bad strategy, and a greedy learner punishes the cooperative action for it. Leniency
+makes the agent forgive: it collects several outcomes for an action and updates towards the
+best of them rather than reacting to every one.</p>
+
+<figure>
+  <img src="../assets/img/kaz/lenient_boltzmann_traces.png" alt="The same replicator field for the Stag Hunt with three lenient Boltzmann Q-learning trajectories.">
+  <figcaption>Lenient Boltzmann traces on the same game, run from three starting policies with
+  the script's default parameters (α = 0.1, initial τ = 1.0 decaying to 0.1, leniency κ = 10).</figcaption>
+</figure>
+
+<p>Where leniency changes the outcome is in the cooperative games — the Stag Hunt and the
+subsidy game — because it stops the conservative pull towards the risk-dominant but lower-payoff
+equilibrium. Where it does not is just as informative: matching pennies has no pure equilibrium,
+so the traces keep circling the mixed equilibrium at (0.5, 0.5) whether or not agents forgive
+each other, and in the prisoner's dilemma defection is a dominant strategy, so forgiveness does
+not make mutual cooperation individually stable. Leniency fixes coordination failures. It does
+not fix a conflict of interest.</p>
+
+<h2>Part two: Knights Archers Zombies</h2>
+
+<p>The second half moves to <code>knights_archers_zombies_v10</code> from PettingZoo's
+Butterfly suite. Unlike a matrix game it is stateful and resolved over hundreds of steps: an
+archer has to survive waves of zombies, and the episode ends when it dies or a zombie reaches
+the bottom of the screen. Shooting the nearest zombie can be the wrong move if repositioning
+buys more safety over the rest of the episode, which is what makes it a sequential decision
+problem rather than a classification one.</p>
+
+<h3>Setup</h3>
+
+<ul>
+  <li><strong>Observation.</strong> The raw flattened vector, normalised using median and IQR
+  statistics over a 10,000-sample history and clipped to [−10, 10]. Robust statistics rather
+  than mean and standard deviation, because the raw features contain occasional extreme values
+  that would otherwise dominate the scaling.</li>
+  <li><strong>Reward.</strong> Sparse and unshaped: +1 for a zombie killed, −1 for dying, zero
+  otherwise. All the long-horizon behaviour has to come from the discount factor, set at
+  γ = 0.995.</li>
+  <li><strong>Network.</strong> Three fully connected layers of 128, 256 and 128 units with
+  ReLU, dropout at 0.1 and L2 regularisation. Invalid actions are masked outside the network
+  rather than learned around.</li>
+  <li><strong>Algorithm.</strong> PPO through Ray RLlib — 2,000 iterations, batch 16,384,
+  minibatch 512, learning rate 2 × 10⁻⁴, clipping 0.2, entropy coefficient 0.02, GAE λ = 0.95,
+  8 SGD epochs per update, early stopping with a patience of 200.</li>
+</ul>
+
+<h3>Result</h3>
+
+<div class="tw">
+<table>
+<thead><tr><th>Agent</th><th class="num">Average score over 100 episodes</th></tr></thead>
+<tbody>
+<tr><td>Random policy</td><td class="num">3.1</td></tr>
+<tr><td>Heuristic — corner shooting</td><td class="num">8.4</td></tr>
+<tr class="hl"><td>Trained PPO agent</td><td class="num">44.7</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>The behaviours it arrived at were not rewarded directly and are the more interesting output:
+it holds fire until a target is visible and aligned, positions near a wall but keeps room to
+manoeuvre, prioritises zombies closest to the bottom of the screen — an urgency heuristic that
+falls out of the discount factor rather than the reward — and focuses fire on one zombie until
+it dies rather than spreading damage.</p>
+
+<h3>Hyperparameters that mattered, and one idea that backfired</h3>
+
+<p>An entropy coefficient below 0.01 caused premature convergence. Doubling the batch from
+8,192 to 16,384 improved both convergence speed and the final score. Halving the learning rate
+slowed convergence and made the endpoint more stable.</p>
+
+<p>Randomising the environment during training to force generalisation made things worse, not
+better — the agent's behaviour became erratic. In hindsight the added stochasticity swamped the
+learning signal, and randomisation of that kind needs a curriculum to lean on rather than being
+switched on from step zero.</p>
+
+<h2>Part three: two archers, which is a different problem</h2>
+
+<p>Adding a second agent makes the environment non-stationary from each agent's point of view:
+the thing it is learning to respond to is itself changing. Before reaching for an algorithm we
+established hard-coded baselines, and they were more informative than expected.</p>
+
+<div class="tw">
+<table>
+<thead><tr><th>Hard-coded two-archer strategy</th><th class="num">Average reward</th></tr></thead>
+<tbody>
+<tr><td>Two random agents</td><td class="num">&lt; 2</td></tr>
+<tr><td>Both archers shooting diagonally and up</td><td class="num">≈ 1</td></tr>
+<tr><td>Both in a lower corner, one shooting horizontally, one vertically</td><td class="num">≈ 3.5</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>Two archers doing the same sensible thing score worse than two archers doing nothing in
+particular. Splitting the coverage between them roughly triples it. That is the whole
+cooperative problem in three rows, and it set the bar the learned policies had to clear.</p>
+
+<p>MAPPO was the obvious candidate given RLlib's support for it, and after tuning it would not
+get past a reward of about 25. QMIX was considered and dropped on time and complexity grounds.
+What eventually worked was PPO under centralised training with decentralised execution: a
+centralised critic that sees both agents during training, decentralised actors that do not need
+it at inference.</p>
+
+<p>Three changes carried most of the improvement. Observations were extended with the relative
+positions of the zombies <em>and of the other archer</em>, which is what lets coordination be
+learned implicitly rather than communicated explicitly. We tried both shared and independent
+policies and settled on shared, for training stability and sample efficiency. And here
+randomisation did pay off, in a form the single-agent attempt lacked: each reset randomises
+spawn rate, maximum zombie count and maximum arrow count, so the agents meet harder situations
+during training than they face at evaluation.</p>
+
+<div class="pn">
+  <a href="thirdperson.html"><span class="lbl">Previous</span>← ThirdPerson</a>
+  <a href="tsp-evolutionary.html"><span class="lbl">Next</span>Evolutionary TSP →</a>
+</div>
+
+</div>
+</article>
+
+<div class="wrap">
+  <footer>
+    <span>Marko Isotupa — Leuven, Belgium</span>
+    <span><a href="mailto:marko.isotupa01@gmail.com">email</a> · <a href="https://github.com/isotupa">github</a> · <a href="https://linkedin.com/in/isotupa">linkedin</a></span>
+  </footer>
+</div>
+
+</body>
+</html>

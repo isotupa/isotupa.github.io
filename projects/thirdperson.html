@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ThirdPerson — Marko Isotupa</title>
+<meta name="description" content="Bachelor's thesis: controlling a DJI Tello drone with hand gestures, using body pose to find the hand before classifying it.">
+<link rel="stylesheet" href="../assets/css/site.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◈</text></svg>">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="home" href="../index.html">← marko&nbsp;isotupa</a>
+    <div class="links"><a href="../index.html#projects">All projects</a></div>
+  </div>
+</nav>
+
+<header class="art-head">
+  <div class="wrap">
+    <div class="kicker">Bachelor's thesis · Universidad Politécnica de Madrid</div>
+    <h1>ThirdPerson: flying a drone by standing in front of it</h1>
+    <p class="standfirst">No controller, no phone. The drone watches you from a few metres
+    away, like a third-person camera in a game, and you direct it with your hands.</p>
+    <div class="meta">
+      <div><div class="k">Role</div><div class="v">Sole author. Trabajo Fin de Grado, carried out with the CVAR robotics lab.</div></div>
+      <div><div class="k">Stack</div><div class="v">Python, MediaPipe, TensorFlow Lite, OpenCV, djitellopy, Docker</div></div>
+      <div><div class="k">Hardware</div><div class="v">DJI Tello, with a webcam simulation mode that runs the whole pipeline without one</div></div>
+      <div><div class="k">When</div><div class="v">2023–2024</div></div>
+    </div>
+  </div>
+</header>
+
+<article>
+<div class="wrap">
+
+<figure class="dark">
+  <video controls muted playsinline preload="metadata"
+         poster="../assets/img/thirdperson-poster.jpg"
+         src="../assets/video/thirdperson-demo.mp4"></video>
+  <figcaption>Flying the Tello through the gesture set. The main view shows the body pose and
+  the green crop the hand detector is restricted to; the panel on the right reports the current
+  mode, the command being sent, the classifier's confidence and the gesture it settled on.</figcaption>
+</figure>
+
+<h2>The problem with gesture control at a distance</h2>
+
+<p>Point a hand detector at a full video frame with a person three metres away and it misses
+the hand, or it finds something that is not a hand. Hands are small, they are far from the
+camera, and there is a lot of frame for the detector to be wrong in. Every approach that treats
+the whole image as the search space runs into this.</p>
+
+<p>ThirdPerson gets around it by leaning on the body first. The body is large, it is easy to
+find, and once you have it you know where the hands are.</p>
+
+<pre><code>camera frame ──► pose landmarker ──► crop around right wrist ──► hand landmarker
+                       │                                              │
+                       │                                              ▼
+                       │                              21 landmarks, normalised
+                       │                                              │
+                       ▼                                              ▼
+              follow controller                          TFLite keypoint classifier
+                       │                                              │
+                       │                                              ▼
+                       │                              gesture buffer (majority vote)
+                       └──────────────► command mapper ◄──────────────┘
+                                              │
+                                              ▼
+                                     send_rc_control(drone)</code></pre>
+
+<p>The pose landmarker runs on every frame and locates the person and their limbs. From that,
+a small window around the right wrist is cropped and the hand landmarker only ever sees the
+crop. Far less to search, far more reliable at range. The 21 hand landmarks are then translated
+to the wrist and scaled, and fed to a small TFLite classifier trained on recordings I made of
+each gesture myself.</p>
+
+<h3>The part that stops the drone twitching</h3>
+
+<p>Per-frame classification is noisy, and a drone that acts on every frame is a drone that
+jerks every time the classifier flickers. Raw predictions go through a short buffer that only
+commits to a gesture once it has been the majority vote over the last several frames. It costs
+a fraction of a second of latency and it is the difference between a demo and something you
+would stand in front of.</p>
+
+<h2>The gestures</h2>
+
+<div class="tw">
+<table>
+<thead><tr><th>Hand sign</th><th>Command</th></tr></thead>
+<tbody>
+<tr><td>Open palm facing the drone</td><td>Forward</td></tr>
+<tr><td>Palm, knuckles facing the drone</td><td>Back</td></tr>
+<tr><td>Fist</td><td>Stop / hold</td></tr>
+<tr><td>Thumbs up / thumbs down</td><td>Up / down</td></tr>
+<tr><td>Thumb pointing left / right</td><td>Strafe left / right</td></tr>
+<tr><td>Point at yourself</td><td>Toggle follow mode</td></tr>
+<tr><td>"OK" sign</td><td>Land</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Two ways to fly</h3>
+
+<p>In <strong>manual mode</strong> each gesture maps to a movement command the drone holds until
+you give it another one. In <strong>follow mode</strong> the drone locks onto your body and keeps
+you centred at a set distance on its own — a separate controller reads the shoulder and nose
+landmarks to estimate how far away and how off-centre you are and turns that into smooth
+velocity commands. Gestures still work in follow mode, but instead of driving the drone they
+adjust how far away it should sit and where it should frame you.</p>
+
+<h2>What made it testable</h2>
+
+<p>The drone sits behind an abstract <code>DroneController</code> interface, and the real Tello
+and a webcam simulator are interchangeable implementations of it. Everything upstream — pose,
+hands, gestures, the GUI — has no idea which one it is talking to. Out of the box the project
+starts in simulation mode against your laptop camera, drawing what it <em>would</em> do without
+touching hardware.</p>
+
+<p>This is not just a convenience. Iterating on a gesture classifier is a loop you want to run
+hundreds of times, and a loop that requires charging a battery, finding a room and accepting
+that a mistake means a drone hitting a wall is a loop you run five times a day.</p>
+
+<h2>What I would fix</h2>
+
+<p>A few gestures are in the code and disabled: a scripted half-circle, a barrel roll, and
+switching to a different person to follow. They worked on and off, and I ran out of runway
+before the deadline to make them reliable. Shipping them half-working would have been worse
+than shipping them off.</p>
+
+<p>The tuning is for indoor use at roughly two to four metres and it is happiest against a
+plain background. This is research code written under a deadline, not a product — and flying a
+real drone with it means the drone actually moves, so it wants space and a hand near the
+keyboard. There are keyboard fallbacks for every command precisely because a gesture system
+that only accepts gestures is a system with no way out.</p>
+
+<div class="pn">
+  <a href="jobpilot.html"><span class="lbl">Previous</span>← JobPilot</a>
+  <a href="kaz-marl.html"><span class="lbl">Next</span>Multi-agent RL →</a>
+</div>
+
+</div>
+</article>
+
+<div class="wrap">
+  <footer>
+    <span>Marko Isotupa — Leuven, Belgium</span>
+    <span><a href="mailto:marko.isotupa01@gmail.com">email</a> · <a href="https://github.com/isotupa">github</a> · <a href="https://linkedin.com/in/isotupa">linkedin</a></span>
+  </footer>
+</div>
+
+</body>
+</html>

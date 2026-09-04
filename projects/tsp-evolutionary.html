@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A memetic TSP solver — Marko Isotupa</title>
+<meta name="description" content="An evolutionary algorithm for the travelling salesman problem: 2-opt on every offspring, a small population, and a restart that rebuilds the population from the best individual.">
+<link rel="stylesheet" href="../assets/css/site.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◈</text></svg>">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="home" href="../index.html">← marko&nbsp;isotupa</a>
+    <div class="links"><a href="../index.html#projects">All projects</a></div>
+  </div>
+</nav>
+
+<header class="art-head">
+  <div class="wrap">
+    <div class="kicker">KU Leuven · Evolutionary Algorithms · 2025</div>
+    <h1>A memetic TSP solver, and what its restarts reveal</h1>
+    <p class="standfirst">An evolutionary algorithm for the travelling salesman problem where
+    local search runs on every single offspring. That one decision determines the population
+    size, the mutation rate and the shape of every convergence plot below.</p>
+    <div class="meta">
+      <div><div class="k">Role</div><div class="v">Individual project, following a shared group phase.</div></div>
+      <div><div class="k">Stack</div><div class="v">Python, NumPy</div></div>
+      <div><div class="k">Budget</div><div class="v">Five minutes per instance, on a 1.4 GHz quad-core i5 with 16 GB</div></div>
+    </div>
+  </div>
+</header>
+
+<article>
+<div class="wrap">
+
+<h2>The design, and the one decision it hangs on</h2>
+
+<p>2-opt is applied to 100% of the offspring in every generation. It repeatedly checks pairs of
+edges and reverses the segment between them when doing so shortens the tour, and it is by far
+the most expensive thing in the loop. Everything else is a consequence of affording it.</p>
+
+<p><strong>The population is small — 50 individuals, 30 offspring per generation.</strong> Given
+a fixed time budget, spending it on fewer but much better individuals beat spending it on a
+large population of unimproved ones.</p>
+
+<p><strong>The mutation rate is high — 0.5.</strong> A double-bridge mutation cuts the tour at
+three points and reconnects the pieces out of order, which is deliberately destructive. It can
+be that destructive because local search repairs the damage immediately afterwards, and the
+combination escapes local optima that a gentler operator would sit in.</p>
+
+<p><strong>The neighbourhood is truncated.</strong> Naive 2-opt checks every edge pair, which is
+O(N²). Restricting it to each city's 20 nearest neighbours brings that to O(kN) with k = 20. The
+candidate lists are built once with <code>argpartition</code> — the top k unsorted in linear
+time, then sorting only those k — rather than sorting every row of the distance matrix.</p>
+
+<p><strong>The search depth is a function of the clock.</strong> With more than ten seconds
+left, up to 30 improving swaps per individual; below that, five. The algorithm spends its last
+seconds covering more individuals shallowly rather than perfecting a few.</p>
+
+<h3>The rest of the loop</h3>
+
+<div class="tw">
+<table>
+<tbody>
+<tr><td>Representation</td><td>Permutation of city indices; the tour closes implicitly from last back to first</td></tr>
+<tr><td>Initialisation</td><td>90% random permutations, 10% nearest-neighbour tours</td></tr>
+<tr><td>Parent selection</td><td>k = 3 tournament, done as one NumPy matrix operation</td></tr>
+<tr><td>Recombination</td><td>OX1 order crossover</td></tr>
+<tr><td>Mutation</td><td>Double bridge, p = 0.5</td></tr>
+<tr><td>Elimination</td><td>(μ + λ) — pool parents and offspring, keep the best 50</td></tr>
+<tr><td>Restart</td><td>After 60 generations without improvement</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>A permutation was chosen over the alternatives for a specific reason: the TSP constraint is
+that every city is visited exactly once, and a permutation enforces that by construction, so no
+repair step is ever needed. A binary encoding would be faster to manipulate but needs constant
+repair; an adjacency encoding preserves edges well but is expensive to decode for fitness and
+makes 2-opt awkward. Selection pressure was tuned rather than assumed — k = 10 collapsed the
+population immediately, k = 1 never converged, and 3 sat between them.</p>
+
+<h3>The restart</h3>
+
+<p>When the global best has not improved for 60 generations, the algorithm takes that single
+best individual, clones it across the entire population, and mutates every copy except one,
+which is protected. It is a hard reset that keeps the discovery and throws away the diversity
+that failed to build on it.</p>
+
+<p>This is the mechanism the plots below are actually showing, and it is why they look the way
+they do.</p>
+
+<h2>What the convergence plots say</h2>
+
+<figure>
+  <img src="../assets/img/ea/t50.png" alt="Convergence plot for a 50-city instance: the best tour length drops immediately to a flat line while the mean objective spikes repeatedly.">
+  <figcaption>tour50. The best objective (red) reaches 13,844 within about three seconds and
+  never moves again. Every blue spike is a restart.</figcaption>
+</figure>
+
+<p>On 50 cities the algorithm finds what is very likely the optimum almost immediately, and
+then spends the remaining 297 seconds failing to beat it. Each blue spike is the population
+being cloned and kicked; each descent is 2-opt pulling it back down. The spikes get more
+frequent towards the end because the shallower late-stage local search converges faster and
+therefore stagnates sooner. It is a picture of an algorithm with nothing left to do, which is
+the correct behaviour and an unusually legible one.</p>
+
+<figure>
+  <img src="../assets/img/ea/histogram_with_failures.png" alt="Histogram of final tour lengths over 500 runs of the algorithm on the 50-city instance.">
+  <figcaption>500 runs on the 50-city instance with a shortened time budget. Final population
+  mean 14,049, standard deviation 629.</figcaption>
+</figure>
+
+<p>Running it 500 times is the check that matters more than any single run: a low standard
+deviation means the algorithm finds the same quality of solution regardless of the random seed,
+rather than getting lucky once in the run you chose to plot.</p>
+
+<figure>
+  <img src="../assets/img/ea/t250.png" alt="Convergence plot for a 250-city instance showing far fewer restarts and a gradual decline in the best objective.">
+  <figcaption>tour250. Far fewer restarts, because the best value keeps improving and the
+  stagnation counter rarely fills.</figcaption>
+</figure>
+
+<p>At 250 cities the behaviour inverts. The best objective is still improving, so the restart
+condition mostly does not fire — there is one restart, around the 220-second mark. The tour
+length levels off near 70 seconds and only creeps down after that. Given more time this one
+would keep going.</p>
+
+<figure>
+  <img src="../assets/img/ea/t1000.png" alt="Convergence plot for a 1000-city instance where the best objective is flat from the very beginning.">
+  <figcaption>tour1000. The best objective is flat from the first generation onwards.</figcaption>
+</figure>
+
+<p>At 1,000 cities the algorithm stops being evolutionary. The best objective settles at its
+final value from the start, which means the nearest-neighbour tours in the initial 10% are never
+beaten. The cause is the interaction between two parameters that are fine on their own: OX1
+crossover on a 1,000-city tour introduces a large amount of disorder, and a local search capped
+at 30 improving swaps is nowhere near enough to repair it. So every offspring comes out worse
+than its parent and is immediately discarded by the strict (μ + λ) elimination. The population
+never moves.</p>
+
+<p>That is a real limitation rather than a tuning miss, and it points at the fix: the swap cap
+has to scale with instance size, or the recombination has to be gentler at scale — the constant
+was tuned at 50 and 250 cities and quietly stopped making sense somewhere in between.</p>
+
+<h2>What the exercise was actually about</h2>
+
+<p>Evolutionary algorithms find usable solutions to problems where exact methods do not finish,
+and they hand you a set of solutions rather than one. The cost is the part this project made
+concrete: they converge into valleys, the parameters are difficult to choose well, and — as the
+1,000-city case shows — a parameter that is correct at one scale can silently disable the whole
+search at another, while still producing a plausible-looking answer and a clean plot.</p>
+
+<div class="pn">
+  <a href="kaz-marl.html"><span class="lbl">Previous</span>← Multi-agent RL</a>
+  <a href="distributed-cinema.html"><span class="lbl">Next</span>Distributed systems →</a>
+</div>
+
+</div>
+</article>
+
+<div class="wrap">
+  <footer>
+    <span>Marko Isotupa — Leuven, Belgium</span>
+    <span><a href="mailto:marko.isotupa01@gmail.com">email</a> · <a href="https://github.com/isotupa">github</a> · <a href="https://linkedin.com/in/isotupa">linkedin</a></span>
+  </footer>
+</div>
+
+</body>
+</html>

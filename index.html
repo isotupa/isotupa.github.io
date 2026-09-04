@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marko Isotupa — AI Engineer</title>
+<meta name="description" content="Marko Isotupa. MSc AI at KU Leuven. Machine learning, robotics and systems work: hybrid physical models, RAG evaluation, drone gesture control, multi-agent RL.">
+<link rel="stylesheet" href="assets/css/site.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◈</text></svg>">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="home" href="index.html">marko&nbsp;isotupa</a>
+    <div class="links">
+      <a href="#projects">Projects</a>
+      <a href="#experience">Experience</a>
+      <a href="https://github.com/isotupa">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <h1>Marko Isotupa</h1>
+    <p class="role">AI engineer &middot; Leuven, Belgium</p>
+    <p>I am finishing an MSc in Computer Science at KU Leuven, specialising in artificial
+    intelligence. Most of what I build sits where a model meets hardware or a real system:
+    a torque estimator that has to stay physically plausible on a machine it was never
+    trained on, a gesture pipeline that has to run on a drone's video feed at frame rate,
+    a retrieval system that has to be measured rather than demoed.</p>
+    <p class="last">Before Leuven I did a computer science degree in Madrid, worked on vision
+    pipelines at a robotics lab, spent a summer writing simulation middleware at Thales, and
+    ran my university's astronomical observatory for four years. The pages below go into
+    what I actually did on each project, including the parts that did not work.</p>
+    <div class="contact">
+      <a href="mailto:marko.isotupa01@gmail.com">marko.isotupa01@gmail.com</a>
+      <a href="https://github.com/isotupa">github.com/isotupa</a>
+      <a href="https://linkedin.com/in/isotupa">linkedin.com/in/isotupa</a>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<section id="projects">
+  <div class="wrap">
+    <h2 class="sec">Selected projects</h2>
+    <div class="cards">
+
+      <a class="card" href="projects/wahoo-torque.html">
+        <div class="kicker">Master's thesis &middot; Wahoo Fitness &middot; 2025–26</div>
+        <h3>A grey-box virtual torque sensor for a smart bike trainer</h3>
+        <p>Wahoo's CORE2 trainer estimates rider power from a factory-calibrated lookup table
+        that has to be rebuilt whenever the hardware changes. I replaced it with a physics
+        model plus a learned residual, added a reject option so the model abstains instead of
+        inventing impossible torque, and tested whether the learned parameters survive a move
+        to a second production unit.</p>
+        <div class="tags"><span>Python</span><span>XGBoost</span><span>NNLS</span><span>SHAP</span><span>Signal processing</span><span>OOD detection</span></div>
+      </a>
+
+      <a class="card" href="projects/rsna-knee.html">
+        <div class="kicker">Kaggle &middot; RSNA 2026</div>
+        <h3>Twelve findings from one knee MRI</h3>
+        <p>A competition entry that predicts twelve diagnoses per MRI study. Most of the work
+        was upstream of the network: deriving labels from radiology reports written in nine
+        languages, recovering slice order from DICOM geometry, and normalising every knee onto
+        one anatomical convention before the encoder sees a pixel.</p>
+        <div class="tags"><span>PyTorch</span><span>DINOv2</span><span>DICOM</span><span>Multilingual NLP</span><span>Attention pooling</span></div>
+      </a>
+
+      <a class="card" href="projects/ros2-rag.html">
+        <div class="kicker">Personal project &middot; 2026</div>
+        <h3>ROS2 RAG, with an evaluation harness that means something</h3>
+        <p>Question answering over the ROS2 documentation, running entirely offline. The part
+        I cared about is the harness: hand-written retrieval metrics, two separate LLM judges
+        for faithfulness and correctness, latency accounting next to the quality numbers, and
+        a cross-check against ragas.</p>
+        <div class="tags"><span>Python</span><span>Chroma</span><span>Ollama</span><span>Cross-encoder</span><span>ragas</span><span>Streamlit</span></div>
+      </a>
+
+      <a class="card" href="projects/jobpilot.html">
+        <div class="kicker">Personal project &middot; 2026</div>
+        <h3>JobPilot: routing a pipeline between a 1.7B model and a frontier one</h3>
+        <p>A semi-automated job application pipeline built to run on a 2019 Intel MacBook with
+        no GPU. Every task is assigned to the smallest model that can do it, and the split is
+        drawn on one line: if the output reaches a recruiter, a large model writes it.</p>
+        <div class="tags"><span>Python</span><span>Ollama</span><span>Qwen3 1.7B</span><span>Claude API</span><span>Playwright</span><span>LaTeX</span></div>
+      </a>
+
+      <a class="card" href="projects/thirdperson.html">
+        <div class="kicker">Bachelor's thesis &middot; UPM Madrid &middot; 2023–24</div>
+        <h3>ThirdPerson: flying a drone with hand gestures</h3>
+        <p>A DJI Tello you control by standing in front of it. Hands are small and far away at
+        flying distance, so the pipeline finds the body first and only looks for a hand in a
+        crop around the wrist. Includes a flight demo.</p>
+        <div class="tags"><span>Python</span><span>MediaPipe</span><span>TFLite</span><span>OpenCV</span><span>Docker</span><span>DJI Tello</span></div>
+      </a>
+
+      <a class="card" href="projects/kaz-marl.html">
+        <div class="kicker">KU Leuven &middot; Machine Learning: Project &middot; 2025</div>
+        <h3>Multi-agent learning, from matrix games to Knights Archers Zombies</h3>
+        <p>Two halves: reproducing the replicator dynamics of Boltzmann and lenient Boltzmann
+        Q-learning on canonical two-player games, then training PPO archers that go from a
+        score of 3 to 45 in a stateful cooperative environment.</p>
+        <div class="tags"><span>Ray RLlib</span><span>PPO</span><span>Game theory</span><span>PettingZoo</span><span>NumPy</span></div>
+      </a>
+
+      <a class="card" href="projects/tsp-evolutionary.html">
+        <div class="kicker">KU Leuven &middot; Evolutionary Algorithms &middot; 2025</div>
+        <h3>A memetic TSP solver with a restart that actually restarts</h3>
+        <p>An evolutionary algorithm for the travelling salesman problem where 2-opt local
+        search runs on every single offspring. The population is small because the search is
+        expensive, and when it stalls the whole population is thrown away and rebuilt from the
+        best individual.</p>
+        <div class="tags"><span>Python</span><span>NumPy</span><span>2-opt</span><span>OX1 crossover</span><span>Benchmarking</span></div>
+      </a>
+
+      <a class="card" href="projects/distributed-cinema.html">
+        <div class="kicker">KU Leuven &middot; Distributed Systems &middot; 2024</div>
+        <h3>A distributed cinema booking system, twice</h3>
+        <p>The same booking service built over gRPC and over a hypermedia REST API, then
+        deployed to Google Cloud with Firestore, Pub/Sub background workers and role-based
+        access control — including a deliberately unreliable third-party service to survive.</p>
+        <div class="tags"><span>Java</span><span>gRPC</span><span>OpenAPI</span><span>Firebase</span><span>Pub/Sub</span><span>GCP</span></div>
+      </a>
+
+    </div>
+  </div>
+</section>
+
+<section id="experience">
+  <div class="wrap">
+    <h2 class="sec">Experience</h2>
+    <div class="rows">
+      <div class="row">
+        <div class="when">Jun – Sep 2025</div>
+        <div class="what">
+          <strong>Software Developer Intern</strong>
+          <span class="where">Thales Belgium</span>
+          <p>Wrote Python middleware bridging simulation environments with real-world systems,
+          and built proofs of concept to check whether proposed features were feasible before
+          they were committed to.</p>
+        </div>
+      </div>
+      <div class="row">
+        <div class="when">Sep 2023 – Jan 2024</div>
+        <div class="what">
+          <strong>Software Systems Developer</strong>
+          <span class="where">CVAR — Computer Vision &amp; Aerial Robotics, UPM</span>
+          <p>Built end-to-end vision pipelines and integrated model inference into real-time
+          robotics systems, with ROS2 and Docker holding the environments together.</p>
+        </div>
+      </div>
+      <div class="row">
+        <div class="when">May 2020 – Sep 2024</div>
+        <div class="what">
+          <strong>Observatory Manager</strong>
+          <span class="where">Astronomical Observatory, UPM</span>
+          <p>Brought the university observatory back into operation and recruited and ran a
+          team of 14 student volunteers, alongside the embedded and electronics work the
+          instruments needed.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="education">
+  <div class="wrap">
+    <h2 class="sec">Education</h2>
+    <div class="rows">
+      <div class="row">
+        <div class="when">2024 – present</div>
+        <div class="what">
+          <strong>MSc Computer Science, AI specialisation</strong>
+          <span class="where">KU Leuven</span>
+          <p>Thesis with Wahoo Fitness on machine learning for torque estimation. Coursework in
+          machine learning, multi-agent systems, reinforcement learning, NLP, evolutionary
+          algorithms, data mining and distributed systems.</p>
+        </div>
+      </div>
+      <div class="row">
+        <div class="when">2019 – 2024</div>
+        <div class="what">
+          <strong>BSc Computer Science</strong>
+          <span class="where">Universidad Politécnica de Madrid</span>
+          <p>Final year project on gesture-based drone control, carried out with the CVAR
+          robotics lab.</p>
+        </div>
+      </div>
+      <div class="row">
+        <div class="when">Nov 2025</div>
+        <div class="what">
+          <strong>Software Reliability</strong>
+          <span class="where">Athens Programme, Politehnica University of Bucharest</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="skills">
+  <div class="wrap">
+    <h2 class="sec">Tools</h2>
+    <div class="skills">
+      <div class="skill"><div class="k">Languages</div><div class="v">Python, Rust, C, Java, MATLAB, SQL</div></div>
+      <div class="skill"><div class="k">ML</div><div class="v">PyTorch, scikit-learn, XGBoost, TensorFlow / TFLite, Ray RLlib, OpenCV, pandas, NumPy</div></div>
+      <div class="skill"><div class="k">Systems</div><div class="v">Docker, Kubernetes, ROS2, Linux, CI/CD, gRPC, REST / OpenAPI, GCP</div></div>
+      <div class="skill"><div class="k">Spoken</div><div class="v">Spanish and Finnish (native), English (C2), French (B2), Dutch (basic)</div></div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<div class="wrap">
+  <footer>
+    <span>Marko Isotupa — Leuven, Belgium</span>
+    <span><a href="mailto:marko.isotupa01@gmail.com">email</a> · <a href="https://github.com/isotupa">github</a> · <a href="https://linkedin.com/in/isotupa">linkedin</a></span>
+  </footer>
+</div>
+
+</body>
+</html>

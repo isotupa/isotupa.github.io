@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JobPilot — Marko Isotupa</title>
+<meta name="description" content="A semi-automated job application pipeline that routes each task to the smallest model that can do it, running a 1.7B model locally on a GPU-less laptop.">
+<link rel="stylesheet" href="../assets/css/site.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◈</text></svg>">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="home" href="../index.html">← marko&nbsp;isotupa</a>
+    <div class="links"><a href="../index.html#projects">All projects</a></div>
+  </div>
+</nav>
+
+<header class="art-head">
+  <div class="wrap">
+    <div class="kicker">Personal project · <a href="https://github.com/isotupa/jobpilot">github.com/isotupa/jobpilot</a></div>
+    <h1>JobPilot: where to draw the line between a 1.7B model and a big one</h1>
+    <p class="standfirst">A job application pipeline built for a 2019 Intel MacBook with no
+    GPU. Every task goes to the smallest model that can do it, and the split is drawn on one
+    rule: if the output reaches a recruiter, a large model writes it.</p>
+    <div class="meta">
+      <div><div class="k">Role</div><div class="v">Solo. Pipeline, model routing, LaTeX tailoring, browser automation.</div></div>
+      <div><div class="k">Stack</div><div class="v">Python, Ollama (Qwen3 1.7B), Claude API, Playwright, LaTeX</div></div>
+      <div><div class="k">Hardware</div><div class="v">Intel i5, 16 GB, no GPU, no PyTorch build, no compile step</div></div>
+    </div>
+  </div>
+</header>
+
+<article>
+<div class="wrap">
+
+<h2>The constraint that shaped it</h2>
+
+<p>The machine is a 2019 Intel MacBook Pro: quad-core i5, 16 GB, no GPU. That rules out running
+anything substantial locally in the usual sense — no PyTorch, no llama.cpp build, no compile
+step. What it does not rule out is a small model served over HTTP by Ollama, which turns out to
+be enough for a surprising share of the pipeline. The local model takes 5 to 15 seconds per
+task on CPU and the fan stays quiet.</p>
+
+<p>So the design question is not "can I run a model" but "which tasks am I willing to hand to a
+1.7B one". The rule I settled on is a single line, and it is about consequences rather than
+difficulty.</p>
+
+<div class="tw">
+<table>
+<thead><tr><th>Task</th><th>Runs on</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Extracting structured fields from a posting</td><td>Qwen3 1.7B</td><td>Short, mechanical, JSON-shaped</td></tr>
+<tr><td>Quick apply/skip pre-screen</td><td>Qwen3 1.7B</td><td>One sentence, throwaway</td></tr>
+<tr><td>Detecting the ATS platform</td><td>Qwen3 1.7B</td><td>Classification over page signals</td></tr>
+<tr><td>Mapping form fields to profile data</td><td>Qwen3 1.7B</td><td>Classification, about 10 seconds</td></tr>
+<tr class="hl"><td>Full fit analysis</td><td>Claude Sonnet</td><td>Judgement you actually read</td></tr>
+<tr class="hl"><td>Rewriting the LaTeX CV</td><td>Claude Sonnet</td><td>Affects hiring decisions</td></tr>
+<tr class="hl"><td>Writing the cover letter</td><td>Claude Sonnet</td><td>Affects hiring decisions</td></tr>
+<tr class="hl"><td>Answering screening questions</td><td>Claude Sonnet</td><td>Goes in front of a recruiter</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>If Ollama is down or the local model starts misbehaving, JobPilot prints one warning and
+routes every task to the large model for the rest of the run. It never silently stalls, and it
+never silently degrades — those are the two ways a hybrid pipeline goes wrong without telling
+you.</p>
+
+<h2>The pipeline</h2>
+
+<figure class="dark">
+<svg viewBox="0 0 720 210" role="img" aria-label="Four-stage pipeline: analyze a posting, generate a tailored CV and letter, fill the application form in a visible browser, and track the outcome. Each stage pauses for human review." xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block;background:#15171a;border-radius:8px">
+  <defs>
+    <marker id="c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 10 5 0 10z" fill="#6f757d"/></marker>
+  </defs>
+  <g font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#969ba3">
+    <g stroke="#262a30" fill="#1b1e22">
+      <rect x="20" y="44" width="150" height="66" rx="6"/>
+      <rect x="196" y="44" width="150" height="66" rx="6"/>
+      <rect x="372" y="44" width="150" height="66" rx="6"/>
+      <rect x="548" y="44" width="152" height="66" rx="6"/>
+    </g>
+    <text x="95" y="68" text-anchor="middle" fill="#e4e6e9">analyze</text>
+    <text x="95" y="87" text-anchor="middle" font-size="10">score the fit,</text>
+    <text x="95" y="101" text-anchor="middle" font-size="10">matches and gaps</text>
+
+    <text x="271" y="68" text-anchor="middle" fill="#e4e6e9">generate</text>
+    <text x="271" y="87" text-anchor="middle" font-size="10">tailor LaTeX CV,</text>
+    <text x="271" y="101" text-anchor="middle" font-size="10">draft the letter</text>
+
+    <text x="447" y="68" text-anchor="middle" fill="#e4e6e9">apply</text>
+    <text x="447" y="87" text-anchor="middle" font-size="10">fill the form in a</text>
+    <text x="447" y="101" text-anchor="middle" font-size="10">visible browser</text>
+
+    <text x="624" y="68" text-anchor="middle" fill="#e4e6e9">track</text>
+    <text x="624" y="87" text-anchor="middle" font-size="10">status, notes,</text>
+    <text x="624" y="101" text-anchor="middle" font-size="10">applications.json</text>
+
+    <g stroke="#6f757d" fill="none" marker-end="url(#c)">
+      <path d="M174 77 H192"/><path d="M350 77 H368"/><path d="M526 77 H544"/>
+    </g>
+
+    <g fill="#e0a955" font-size="10">
+      <text x="95" y="140" text-anchor="middle">▲ you read it</text>
+      <text x="271" y="140" text-anchor="middle">▲ y / tweak / edit / revert</text>
+      <text x="447" y="140" text-anchor="middle">▲ you press Submit</text>
+    </g>
+    <text x="360" y="176" text-anchor="middle" font-size="10" fill="#5c6167">every stage stops and waits — nothing is sent without a human in the loop</text>
+  </g>
+</svg>
+<figcaption>Four commands, each of which halts for review. The CV stage shows a per-file diff
+before anything compiles; the apply stage stops in front of the Submit button.</figcaption>
+</figure>
+
+<h3>Tailoring a CV without letting it drift</h3>
+
+<p>The canonical CV is a multi-file LaTeX project. The tree is copied into the application
+folder and only four section files are rewritten — profile, experience, projects, skills. The
+model reorders bullets so the most relevant lead, works the posting's vocabulary in where it
+honestly applies, and rewrites the sidebar profile for the role. It does not invent anything.</p>
+
+<p>The interesting bit is what happens on a second pass. After a diff you can type
+<code>tweak</code> with an instruction — "lead with the thesis", "say SQL not databases" — and
+the model revises. That revision is validated against the <em>base</em> CV rather than the
+previous revision, so repeated tweaks cannot walk past the structural limits one small step at
+a time. Nothing compiles until you approve it.</p>
+
+<p>The cover letter is handled the other way round. It is a personalisation of an existing
+letter, not a fresh draft: the story paragraphs are its spine, so they are substituted verbatim
+in code and the model only fills placeholders and rewrites the one bridge paragraph. A model
+rewriting the whole letter each time produces something fluent and slightly different from what
+I would say, which is exactly the failure I wanted to make structurally impossible.</p>
+
+<h3>Filling forms, and stopping</h3>
+
+<p>The apply stage opens Chromium — visible, never headless — detects the applicant tracking
+system and warns up front when it is one of the awkward ones. It fills the identity fields,
+uploads the PDF and pastes the letter. Open-ended questions get a short generated answer that
+is pasted, <em>highlighted yellow</em>, and announced for review. Anything it is unsure of gets
+highlighted and handed back with a pause.</p>
+
+<div class="note">
+<p><strong>Three rules enforced in code rather than in a prompt:</strong> it never clicks
+Submit, never creates accounts, and never solves CAPTCHAs. It stops in front of the final
+button and waits. A prompt asking a model not to do something is a request; a branch that has
+no code path to the Submit button is a guarantee, and for anything that acts on a real site on
+someone else's behalf that difference is the whole design.</p>
+</div>
+
+<h3>The health check</h3>
+
+<p>Five dependencies have to line up — an API key, Ollama with the model pulled, pdflatex,
+Playwright browsers, a writable output directory — and each fails differently. The startup
+check prints one line per dependency with the exact command to fix it, and distinguishes
+degraded-but-usable (<code>○</code>, you keep the .tex instead of a PDF) from will-not-run
+(<code>✗</code>). Setup failures are the most common way a tool like this gets abandoned, so
+they get the same care as the pipeline.</p>
+
+<div class="pn">
+  <a href="ros2-rag.html"><span class="lbl">Previous</span>← ROS2 RAG</a>
+  <a href="thirdperson.html"><span class="lbl">Next</span>ThirdPerson →</a>
+</div>
+
+</div>
+</article>
+
+<div class="wrap">
+  <footer>
+    <span>Marko Isotupa — Leuven, Belgium</span>
+    <span><a href="mailto:marko.isotupa01@gmail.com">email</a> · <a href="https://github.com/isotupa">github</a> · <a href="https://linkedin.com/in/isotupa">linkedin</a></span>
+  </footer>
+</div>
+
+</body>
+</html>
